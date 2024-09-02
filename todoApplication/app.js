@@ -1,11 +1,7 @@
 const express = require('express')
-const path = require('path')
 const { open } = require('sqlite')
 const sqlite3 = require('sqlite3')
-const bcrypt = require('bcrypt')
-const jwt = require('jsonwebtoken')
-const { format } = require('date-fns')
-const {isValid} = require('date-fns')
+const { isValid, format } = require('date-fns')
 
 const app = express()
 
@@ -13,22 +9,44 @@ app.use(express.json())
 
 
 let dbPromise = open({
-    filename: 'todoApplication.db',
+    filename: './todoApplication.db',
     driver: sqlite3.Database
 })
 
+function validateRequestBody(req, res, next) {
+    let { priority, status, category, dueDate } = req.body;
+    const validPriorities = ['LOW', 'MEDIUM', 'HIGH'];
+    if (priority && !validPriorities.includes(priority)) {
+        return res.status(400).send('Invalid Todo Priority');
+    }
+
+    // Validate status
+    const validStatuses = ['TO DO', 'IN PROGRESS', 'DONE'];
+    if (status && !validStatuses.includes(status)) {
+        return res.status(400).send('Invalid Todo Status');
+    }
+
+    // Validate category
+    const validCategories = ['WORK', 'HOME', 'LEARNING'];
+    if (category && !validCategories.includes(category)) {
+        return res.status(400).send('Invalid Todo Category');
+    }
+
+    // Validate and format due_date
+    if (dueDate) {
+        let date = new Date(dueDate);
+        if (!isValid(date)) {
+            return res.status(400).send('Invalid Due Date');
+        } else {
+            dueDate = format(date, 'yyyy-MM-dd');
+        }
+    }
+    next()
+}
 
 function validateRequestParameters(req, res, next) {
     let { status, priority, search_q, category, due_date } = req.query;
 
-    // Replace spaces in URL with %20 (handled by client/browser, but decodeURIComponent ensures proper decoding)
-    // status = decodeURIComponent(status || '');
-    // priority = decodeURIComponent(priority || '');
-    // search_q = decodeURIComponent(search_q || '');
-    // category = decodeURIComponent(category || '');
-    // due_date = decodeURIComponent(due_date || '');
-
-    // Validate priority
     const validPriorities = ['LOW', 'MEDIUM', 'HIGH'];
     if (priority && !validPriorities.includes(priority)) {
         return res.status(400).send('Invalid Todo Priority');
@@ -49,15 +67,6 @@ function validateRequestParameters(req, res, next) {
     // Validate and format due_date
     if (due_date) {
         let date = new Date(due_date);
-        // let month = date.getMonth() + 1;
-        // let day = date.getDate();
-        // let year = date.getFullYear();
-
-        // if (month > 12 || month < 1 || day > 31 || day < 1 || year < 1000 || year > 9999) {
-        //     return res.status(400).send('Invalid Due Date');
-        // } else {
-        //     due_date = format(date, 'yyyy-MM-dd');
-        // }
         if (!isValid(date)) {
             return res.status(400).send('Invalid Due Date');
         } else {
@@ -115,10 +124,11 @@ app.get('/todos', validateRequestParameters, async (req, res) => {
 app.get('/todos/:todoId/', async (req, res) => {
     const db = await dbPromise;
     let { todoId } = req.params;
+    console.log(req.params);
     let query = `SELECT * FROM todo WHERE id = ${todoId};`
     let result = await db.get(query)
     if (result === undefined) {
-        res.status(400).send('Invalid Todo Id')
+        res.status(404).send('Invalid Todo Id')
     }
     result = {
         id: result.id,
@@ -133,9 +143,20 @@ app.get('/todos/:todoId/', async (req, res) => {
 
 app.get('/agenda/', async (req, res) => {
     const db = await dbPromise;
-    let { date } = req.query;
+    console.log(req.query)
+    let {date} = req.query;
+    if (!isValid(new Date(date))) {
+        res.status(400).send('Invalid Due Date')
+        return
+    }
+    date = format(new Date(date), 'yyyy-MM-dd')
     let query = `SELECT * FROM todo WHERE due_date = '${date}';`
     let result = await db.all(query)
+    if (result === undefined) {
+        res.status(400).send('Invalid Due Date')
+        return
+
+    }
     result = result.map((todo) => {
         return {
             id: todo.id,
@@ -148,19 +169,20 @@ app.get('/agenda/', async (req, res) => {
     }
     )
     res.json(result)
+
 }
 );
 
-app.post('/todos/', async (req, res) => {
+app.post('/todos/', validateRequestBody, async (req, res) => {
     const db = await dbPromise;
-    let { todo, priority, status, category, dueDate } = req.body;
-    let query = `INSERT INTO todo (todo, priority, status, category, due_date) VALUES ('${todo}', '${priority}', '${status}', '${category}', '${dueDate}');`
+    let {id, todo, priority, status, category, dueDate } = req.body;
+    let query = `INSERT INTO todo (todo, priority, status, category, due_date, id) VALUES ('${todo}', '${priority}', '${status}', '${category}', '${dueDate}', '${id}');`
     await db.run(query)
     res.send('Todo Successfully Added')
 }
 );
 
-app.put('/todos/:todoId/', async (req, res) => {
+app.put('/todos/:todoId/', validateRequestBody, async (req, res) => {
     const db = await dbPromise;
     let { todoId } = req.params;
     let { todo, priority, status, category, dueDate } = req.body;
@@ -197,10 +219,6 @@ app.put('/todos/:todoId/', async (req, res) => {
         return
     }
 
-    // let query = `UPDATE todo SET todo = '${todo}', priority = '${priority}', status = '${status}', category = '${category}', due_date = '${dueDate}' WHERE id = ${todoId};`
-    // await db.run(query)
-    // res.send('Todo Updated Successfully')
-    //
 });
 
 app.delete('/todos/:todoId/', async (req, res) => {
